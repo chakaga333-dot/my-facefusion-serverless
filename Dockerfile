@@ -1,7 +1,7 @@
 # Базовый образ с CUDA 11.8 и PyTorch для стабильной работы с RTX картами
 FROM runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04
 
-# Установка системных зависимостей
+# Установка системных зависимостей + cuDNN
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     libgl1-mesa-glx \
@@ -9,6 +9,8 @@ RUN apt-get update && apt-get install -y \
     python3-tk \
     wget \
     git \
+    libcudnn8=8.6.0.163-1+cuda11.8 \
+    libcudnn8-dev=8.6.0.163-1+cuda11.8 \
     && rm -rf /var/lib/apt/lists/*
 
 # Установка рабочей директории
@@ -51,6 +53,10 @@ RUN pip install --no-cache-dir runpod
 
 # Создание директории для моделей
 RUN mkdir -p /root/.facefusion/models
+
+# Предзагрузка критически важных моделей для избежания ошибок валидации
+RUN cd /root/.facefusion/models && \
+    wget -q https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/open_nsfw.onnx || echo "open_nsfw download failed, will download at runtime"
 
 # Модели будут скачаны автоматически FaceFusion при первом запуске
 # Это надежнее чем пытаться скачать их вручную при сборке образа
