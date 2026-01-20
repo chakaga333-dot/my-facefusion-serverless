@@ -4,6 +4,11 @@ import os
 import sys
 import urllib.request
 import onnxruntime
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email.mime.text import MIMEText
+from email import encoders
 
 # ============================================================
 # ДИАГНОСТИКА CUDA ПРИ ЗАПУСКЕ
@@ -32,6 +37,80 @@ print(f"LD_LIBRARY_PATH: {os.environ.get('LD_LIBRARY_PATH', '❌ Не устан
 print(f"CUDA_HOME: {os.environ.get('CUDA_HOME', '❌ Не установлена')}")
 print("=" * 60)
 sys.stdout.flush()
+
+
+def send_email_with_attachment(file_path, recipient_email):
+    """
+    Отправка видео на email через SMTP Gmail
+    
+    ВАЖНО: Нужно настроить переменные окружения:
+    - SMTP_EMAIL: ваш Gmail (например: yourname@gmail.com)
+    - SMTP_PASSWORD: пароль приложения Gmail (не обычный пароль!)
+    """
+    try:
+        # Получение credentials из переменных окружения
+        smtp_email = os.environ.get('SMTP_EMAIL')
+        smtp_password = os.environ.get('SMTP_PASSWORD')
+        
+        if not smtp_email or not smtp_password:
+            print("⚠️ SMTP credentials не настроены. Видео не отправлено.")
+            print("   Установите SMTP_EMAIL и SMTP_PASSWORD в RunPod")
+            return False
+        
+        print(f"\n📧 Отправка видео на {recipient_email}...")
+        
+        # Создание сообщения
+        msg = MIMEMultipart()
+        msg['From'] = smtp_email
+        msg['To'] = recipient_email
+        msg['Subject'] = "✅ Ваше FaceFusion видео готово!"
+        
+        # Текст письма
+        body = """
+Здравствуйте!
+
+Ваше видео с замененным лицом успешно обработано и готово к просмотру.
+
+Видео прикреплено к этому письму.
+
+---
+FaceFusion RunPod Service
+        """
+        msg.attach(MIMEText(body, 'plain'))
+        
+        # Прикрепление видео
+        file_size_mb = os.path.getsize(file_path) / 1024 / 1024
+        print(f"📎 Прикрепляю файл ({file_size_mb:.2f} MB)...")
+        
+        with open(file_path, 'rb') as attachment:
+            part = MIMEBase('application', 'octet-stream')
+            part.set_payload(attachment.read())
+        
+        encoders.encode_base64(part)
+        part.add_header(
+            'Content-Disposition',
+            f'attachment; filename=facefusion_result.mp4'
+        )
+        msg.attach(part)
+        
+        # Отправка через Gmail SMTP
+        print("🔄 Подключение к Gmail SMTP...")
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(smtp_email, smtp_password)
+        
+        print("📤 Отправка письма...")
+        server.send_message(msg)
+        server.quit()
+        
+        print(f"✅ Письмо успешно отправлено на {recipient_email}!")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Ошибка при отправке email: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
 
 
 def download_file(url, output_path):
@@ -151,14 +230,17 @@ def process_facefusion(job):
         print(f"\n✅ УСПЕХ! Файл создан: {output_path}")
         print(f"📦 Размер файла: {file_size / 1024 / 1024:.2f} MB")
         
-        # Здесь можно добавить загрузку результата в S3/R2 storage
-        # и вернуть публичный URL вместо локального пути
+        # Отправка результата на email
+        recipient_email = job_input.get("email", "chakaga@mail.ru")  # Email по умолчанию
+        email_sent = send_email_with_attachment(output_path, recipient_email)
         
         return {
             "success": True,
             "output_path": output_path,
             "file_size_mb": round(file_size / 1024 / 1024, 2),
-            "message": "Обработка успешно завершена"
+            "email_sent": email_sent,
+            "recipient_email": recipient_email,
+            "message": "Обработка успешно завершена" + (" и отправлена на email" if email_sent else "")
         }
         
     except subprocess.TimeoutExpired:
