@@ -2,14 +2,17 @@ import runpod
 import subprocess
 import os
 import base64
-import time
+import sys
 
 def handler(job):
     try:
         job_input = job["input"]
         
-        # 1. ПРИНУДИТЕЛЬНОЕ ОТКЛЮЧЕНИЕ NSFW (через переменные окружения и конфиг)
+        # 1. ОТКЛЮЧАЕМ NSFW ЧЕРЕЗ ПЕРЕМЕННУЮ ОКРУЖЕНИЯ
+        # Это не даст ему проверять хэш модели open_nsfw
         os.environ["FACEFUSION_CONTENT_ANALYSER_MODEL"] = "none"
+        
+        # Также создаем конфиг на всякий случай
         config_dir = os.path.expanduser('~/.facefusion')
         os.makedirs(config_dir, exist_ok=True)
         with open(os.path.join(config_dir, 'facefusion.ini'), 'w') as f:
@@ -20,20 +23,17 @@ def handler(job):
         target_path = job_input.get("targetPath", "/workspace/video/1.mp4")
         output_path = "/tmp/output_result.mp4"
 
-        # Очистка старых файлов перед стартом
-        if os.path.exists(output_path): os.remove(output_path)
-
-        # 3. ДЕКОДИРОВАНИЕ ЛИЦА
+        # 3. СОХРАНЯЕМ ЛИЦО (Base64 -> Файл)
         face_base64 = job_input.get("faceBase64")
         if face_base64:
             if "," in face_base64: face_base64 = face_base64.split(",")[1]
             with open(source_path, "wb") as f:
                 f.write(base64.b64decode(face_base64))
         else:
-            return {"success": False, "error": "No faceBase64"}
+            return {"success": False, "error": "No faceBase64 provided"}
 
-        # 4. ТВОЯ КОМАНДА (БЕЗ СПОРНЫХ ФЛАГОВ)
-        # Оставляем только то, что 100% работает в консоли
+        # 4. ТВОЯ КОМАНДА (БЕЗ ОШИБОЧНОГО АРГУМЕНТА)
+        # Убрали --content-analyser-model чтобы facefusion не ругался
         command = [
             "python", "facefusion.py", "headless-run",
             "-s", source_path,
@@ -48,33 +48,34 @@ def handler(job):
             "--skip-download"
         ]
 
-        print(f"🚀 СТАРТ ГЕНЕРАЦИИ: {' '.join(command)}")
+        print(f"🚀 GPU Task Start: {' '.join(command)}")
+        sys.stdout.flush()
         
-        # Запуск с захватом всех логов для отладки
-        process = subprocess.run(command, cwd="/app", capture_output=True, text=True)
+        # Запуск FaceFusion
+        result = subprocess.run(command, cwd="/app", capture_output=True, text=True)
 
-        # Проверяем результат
-        if not os.path.exists(output_path):
+        # 5. ПРОВЕРЯЕМ РЕЗУЛЬТАТ И ОТПРАВЛЯЕМ BASE64
+        if os.path.exists(output_path):
+            with open(output_path, "rb") as v:
+                video_data = base64.b64encode(v.read()).decode('utf-8')
+            
+            # Удаляем временные файлы
+            os.remove(source_path)
+            os.remove(output_path)
+
+            return {
+                "success": True,
+                "videoBase64": video_data, # Твое видео летит в HTML!
+                "message": "круто"
+            }
+        else:
+            # Если файла нет, возвращаем логи ошибки
             return {
                 "success": False, 
-                "error": "Видео не создано", 
-                "stdout": process.stdout, 
-                "stderr": process.stderr
+                "error": "Файл не создался. Проверь логи.",
+                "stdout": result.stdout,
+                "stderr": result.stderr
             }
-
-        # 5. КОДИРУЕМ ВИДЕО ОБРАТНО В BASE64
-        with open(output_path, "rb") as v:
-            video_data = base64.b64encode(v.read()).decode('utf-8')
-
-        # Чистим временные файлы
-        os.remove(source_path)
-        os.remove(output_path)
-
-        return {
-            "success": True,
-            "videoBase64": video_data,
-            "message": "круто"
-        }
 
     except Exception as e:
         return {"success": False, "error": str(e)}
