@@ -2,78 +2,73 @@ import runpod
 import subprocess
 import os
 import base64
-import urllib.request
-
-# Твоя диагностика остается
-print("=" * 60)
-print("🚀 ЗАПУСК САМОЙ ЛУЧШЕЙ СБОРКИ (КРУТО)")
-print("=" * 60)
+import time
 
 def handler(job):
     try:
         job_input = job["input"]
         
-        # --- [ СЕКРЕТНЫЙ ФИКС NSFW ] ---
-        # Мы создаем конфиг, который отключает проверку хэша open_nsfw навсегда
-        os.makedirs(os.path.expanduser('~/.facefusion'), exist_ok=True)
-        config_path = os.path.expanduser('~/.facefusion/facefusion.ini')
-        with open(config_path, 'w') as f:
+        # 1. ПРИНУДИТЕЛЬНОЕ ОТКЛЮЧЕНИЕ NSFW (через переменные окружения и конфиг)
+        os.environ["FACEFUSION_CONTENT_ANALYSER_MODEL"] = "none"
+        config_dir = os.path.expanduser('~/.facefusion')
+        os.makedirs(config_dir, exist_ok=True)
+        with open(os.path.join(config_dir, 'facefusion.ini'), 'w') as f:
             f.write('[choices]\ncontent_analyser_model = none\n')
-        # -------------------------------
 
-        # 1. Пути
+        # 2. ПУТИ
         source_path = "/tmp/source.jpg"
         target_path = job_input.get("targetPath", "/workspace/video/1.mp4")
         output_path = "/tmp/output_result.mp4"
 
-        # 2. Сохраняем лицо из Base64 (от твоего HTML)
+        # Очистка старых файлов перед стартом
+        if os.path.exists(output_path): os.remove(output_path)
+
+        # 3. ДЕКОДИРОВАНИЕ ЛИЦА
         face_base64 = job_input.get("faceBase64")
         if face_base64:
             if "," in face_base64: face_base64 = face_base64.split(",")[1]
             with open(source_path, "wb") as f:
                 f.write(base64.b64decode(face_base64))
         else:
-            return {"success": False, "error": "No faceBase64 provided"}
+            return {"success": False, "error": "No faceBase64"}
 
-        # 3. ТВОЯ ИДЕАЛЬНАЯ КОМАНДА (которую мы обсуждали)
-        # Если напарник прислал свои args - берем их, если нет - твои стандартные
-        args = job_input.get("args")
-        if not args:
-            args = [
-                "facefusion.py", "headless-run",
-                "-s", source_path,
-                "-t", target_path,
-                "-o", output_path,
-                "--processors", "face_swapper",
-                "--execution-providers", "cuda",
-                "--execution-thread-count", "4",
-                "--execution-queue-count", "2",
-                "--video-memory-strategy", "moderate",
-                "--face-detector-model", "yoloface",
-                "--face-detector-size", "640x640",
-                "--skip-download"
-            ]
+        # 4. ТВОЯ КОМАНДА (БЕЗ СПОРНЫХ ФЛАГОВ)
+        # Оставляем только то, что 100% работает в консоли
+        command = [
+            "python", "facefusion.py", "headless-run",
+            "-s", source_path,
+            "-t", target_path,
+            "-o", output_path,
+            "--processors", "face_swapper",
+            "--execution-providers", "cuda",
+            "--execution-thread-count", "4",
+            "--execution-queue-count", "2",
+            "--video-memory-strategy", "moderate",
+            "--face-detector-model", "yoloface",
+            "--skip-download"
+        ]
 
-        print(f"🚀 GPU Task Start with command: {' '.join(args)}")
+        print(f"🚀 СТАРТ ГЕНЕРАЦИИ: {' '.join(command)}")
         
-        # Запуск FaceFusion
-        result = subprocess.run(
-            ["python"] + args, 
-            cwd="/app", 
-            capture_output=True, 
-            text=True
-        )
+        # Запуск с захватом всех логов для отладки
+        process = subprocess.run(command, cwd="/app", capture_output=True, text=True)
 
-        if result.returncode != 0:
-            return {"success": False, "error": result.stderr or result.stdout}
+        # Проверяем результат
+        if not os.path.exists(output_path):
+            return {
+                "success": False, 
+                "error": "Видео не создано", 
+                "stdout": process.stdout, 
+                "stderr": process.stderr
+            }
 
-        # 4. ВОЗВРАЩАЕМ ВИДЕО В HTML (в Base64)
-        video_data = None
-        if os.path.exists(output_path):
-            with open(output_path, "rb") as v:
-                video_data = base64.b64encode(v.read()).decode('utf-8')
-            # Чистим за собой
-            os.remove(output_path)
+        # 5. КОДИРУЕМ ВИДЕО ОБРАТНО В BASE64
+        with open(output_path, "rb") as v:
+            video_data = base64.b64encode(v.read()).decode('utf-8')
+
+        # Чистим временные файлы
+        os.remove(source_path)
+        os.remove(output_path)
 
         return {
             "success": True,
