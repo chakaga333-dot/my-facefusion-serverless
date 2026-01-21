@@ -3,32 +3,27 @@ import subprocess
 import os
 import base64
 import urllib.request
-import requests
 
 def handler(job):
     try:
         job_input = job["input"]
-        requestId = job_input.get("requestId", "task_1")
         
-        # Пути (используем стандартные из твоего рабочего примера)
+        # 1. Пути внутри твоего контейнера
         source_path = "/tmp/source.jpg"
-        target_path = job_input.get("templatePath", "/tmp/target.mp4")
-        output_path = "/tmp/output_result.mp4"
+        # Напарник сам скажет, какой шаблон взять из твоего хранилища
+        target_path = job_input.get("templatePath", "/runpod-volume/templates/4.mp4")
+        output_path = "/tmp/result.mp4"
 
-        # 1. Сохраняем фото (Base64 от HTML или напарника)
+        # 2. Получаем лицо (Base64 от напарника)
         face_base64 = job_input.get("faceBase64")
         if face_base64:
             if "," in face_base64: face_base64 = face_base64.split(",")[1]
             with open(source_path, "wb") as f:
                 f.write(base64.b64decode(face_base64))
+        else:
+            return {"success": False, "error": "No face data"}
 
-        # 2. Проверяем шаблон (если напарник прислал URL)
-        template_url = job_input.get("templateUrl")
-        if template_url and not os.path.exists(target_path):
-            os.makedirs(os.path.dirname(target_path), exist_ok=True)
-            urllib.request.urlretrieve(template_url, target_path)
-
-        # 3. ТВОЯ ИДЕАЛЬНАЯ КОМАНДА
+        # 3. ТВОЯ ИДЕАЛЬНАЯ КОМАНДА (Чистая мощь GPU)
         command = [
             "python", "facefusion.py",
             "headless-run",
@@ -42,26 +37,30 @@ def handler(job):
             "--video-memory-strategy", "moderate",
             "--face-detector-model", "yoloface",
             "--face-detector-size", "640x640",
-            "--skip-download" # Добавляем, чтобы не качал модели из сети
+            "--skip-download"
         ]
 
-        print(f"🚀 Running command: {' '.join(command)}")
-        
-        # Запуск
+        # Запуск FaceFusion
+        print(f"🚀 GPU Task Start...")
         result = subprocess.run(command, cwd="/app", capture_output=True, text=True)
 
         if result.returncode != 0:
             return {"success": False, "error": result.stderr}
 
-        # 4. Кодируем результат в Base64 для возврата в HTML/напарнику
+        # 4. ОТДАЕМ ВИДЕО НАПАРНИКУ (в Base64)
         video_data = None
         if os.path.exists(output_path):
             with open(output_path, "rb") as v:
                 video_data = base64.b64encode(v.read()).decode('utf-8')
 
+        # 5. Чистим за собой только временные файлы
+        if os.path.exists(source_path): os.remove(source_path)
+        if os.path.exists(output_path): os.remove(output_path)
+
+        # Возвращаем результат серверу напарника
         return {
             "success": True,
-            "videoBase64": video_data,
+            "videoBase64": video_data, # Напарник заберет это и сохранит у себя
             "message": "круто"
         }
 
