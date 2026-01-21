@@ -1,4 +1,4 @@
-name: Build and Push sborka-11
+name: Build and Push sborka-12
 on:
   push:
     branches: [ main ]
@@ -15,4 +15,4 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/facefusion-serverless:sborka-11
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/facefusion-serverless:sborka-12
