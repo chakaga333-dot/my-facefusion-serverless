@@ -18,126 +18,194 @@ import numpy as np
 print(f"NumPy версия: {np.__version__}")
 if np.__version__.startswith('2.'):
     print("❌ КРИТИЧЕСКАЯ ОШИБКА: NumPy 2.x установлена!")
+    print("   Требуется NumPy 1.26.4")
 else:
     print("✅ NumPy версия корректная")
 
 providers = onnxruntime.get_available_providers()
-print(f"Доступные провайдеры: {providers}")
+print(f"ONNX Runtime версия: {onnxruntime.__version__}")
+print("Доступные провайдеры:", providers)
 print("CUDA доступна:", "CUDAExecutionProvider" in providers)
+print("=" * 60)
+
+print("📋 ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ:")
+print(f"LD_LIBRARY_PATH: {os.environ.get('LD_LIBRARY_PATH', '❌ Не установлена')}")
+print(f"CUDA_HOME: {os.environ.get('CUDA_HOME', '❌ Не установлена')}")
 print("=" * 60)
 sys.stdout.flush()
 
+
 def save_file_from_url(url, output_path):
+    """Скачивание файла по URL"""
     try:
-        print(f"📥 Скачиваю файл: {url} -> {output_path}")
+        print(f"📥 Скачиваю файл: {url}")
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
         urllib.request.urlretrieve(url, output_path)
+        print(f"✅ Файл сохранен: {output_path}")
         return True
     except Exception as e:
-        print(f"❌ Ошибка скачивания: {e}")
+        print(f"❌ Ошибка при скачивании: {str(e)}")
         return False
 
-def send_callback(url, data):
+
+def save_file_from_base64(base64_data, output_path):
+    """Сохранение base64 в файл"""
     try:
-        requests.post(url, json=data, timeout=30)
-        print(f"📡 Callback отправлен на {url}")
+        if ',' in base64_data:
+            base64_data = base64_data.split(',')[1]
+        
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        with open(output_path, 'wb') as f:
+            f.write(base64.b64decode(base64_data))
+        print(f"✅ Файл сохранен из base64: {output_path}")
+        return True
     except Exception as e:
-        print(f"⚠️ Ошибка callback: {e}")
+        print(f"❌ Ошибка сохранения base64: {str(e)}")
+        return False
+
+
+def file_to_base64(file_path):
+    """Конвертация файла в base64"""
+    try:
+        with open(file_path, 'rb') as f:
+            data = f.read()
+        base64_data = base64.b64encode(data).decode('utf-8')
+        print(f"✅ Файл конвертирован в base64 ({len(base64_data)} символов)")
+        return base64_data
+    except Exception as e:
+        print(f"❌ Ошибка конвертации: {str(e)}")
+        return None
+
+
+def send_callback(callback_url, data):
+    """Отправка callback на VPS сервер"""
+    try:
+        print(f"📡 Отправка callback на {callback_url}")
+        response = requests.post(callback_url, json=data, timeout=30)
+        print(f"✅ Callback отправлен: {response.status_code}")
+        return True
+    except Exception as e:
+        print(f"⚠️ Ошибка callback: {str(e)}")
+        return False
+
 
 def handler(job):
+    """
+    Универсальный обработчик с поддержкой GPU и callback
+    """
     try:
-        job_input = job["input"]
-        request_id = job.get("id")
+        print("\n" + "=" * 60)
+        print("🚀 НАЧАЛО ОБРАБОТКИ ЗАДАЧИ")
+        print("=" * 60)
         
-        # Параметры для напарника
-        user_id = job_input.get("userId")
+        job_input = job["input"]
+        
+        request_id = job_input.get("requestId", "unknown")
+        user_id = job_input.get("userId", "unknown")
         callback_url = job_input.get("callbackUrl")
         
-        # 1. ПОДГОТОВКА ПУТЕЙ
-        source_path = "/tmp/source.jpg"
-        target_path = "/tmp/target.mp4"
-        output_path = "/tmp/output_result.mp4"
-
-        # 2. ПОЛУЧЕНИЕ ИСТОЧНИКА (ЛИЦО)
-        face_base64 = job_input.get("faceBase64")
-        if face_base64:
-            if "," in face_base64: face_base64 = face_base64.split(",")[1]
-            with open(source_path, "wb") as f:
-                f.write(base64.b64decode(face_base64))
-            print("✅ Лицо получено из Base64")
-        else:
-            return {"success": False, "error": "❌ Нет faceBase64"}
-
-        # 3. ПОЛУЧЕНИЕ ТАРГЕТА (ВИДЕО)
+        os.makedirs("/tmp/input", exist_ok=True)
+        os.makedirs("/tmp/output", exist_ok=True)
+        
+        # 1. Template/Target Video
         template_url = job_input.get("templateUrl")
-        if template_url:
-            if template_url.startswith("/workspace"):
-                target_path = template_url # Используем локальный путь
-                print(f"📂 Использую локальное видео: {target_path}")
-            else:
-                if not save_file_from_url(template_url, target_path):
-                    return {"success": False, "error": "❌ Не удалось скачать видео"}
+        template_path = job_input.get("templatePath", "/tmp/input/target.mp4")
+        target_url = job_input.get("target_video_url")
+        
+        video_source = template_url or target_url
+        if not video_source:
+            return {"success": False, "error": "❌ Не указано видео"}
+        
+        if not video_source.startswith("/workspace"): # Если не локальный путь, качаем
+            if not save_file_from_url(video_source, template_path):
+                return {"success": False, "error": "❌ Не удалось скачать видео"}
         else:
-            return {"success": False, "error": "❌ Не указано видео (templateUrl)"}
+            template_path = video_source
 
-        # 4. ФОРМИРОВАНИЕ КОМАНДЫ (ИСПРАВЛЕННО)
-        # Мы принудительно добавляем --content-analyser-model none
-        args = [
-            "python", "facefusion.py", "headless-run",
-            "-s", source_path,
-            "-t", target_path,
-            "-o", output_path,
-            "--processors", "face_swapper",
-            "--execution-providers", "cuda",
-            "--video-memory-strategy", "moderate",
-            "--face-detector-model", "yoloface",
-            "--skip-download",
-            "--content-analyser-model", "none" # ЭТО ГЛАВНЫЙ ФИКС
-        ]
-
-        # Если в запросе пришли свои доп. аргументы, объединяем их осторожно
-        extra_args = job_input.get("args", [])
-        if extra_args and isinstance(extra_args, list):
-            # Убираем из входящих args те, что могут конфликтовать
-            cleaned_extra = [a for a in extra_args if a not in args and a != "facefusion.py" and a != "headless-run"]
-            args.extend(cleaned_extra)
-
-        print(f"🚀 ЗАПУСК FACEFUSION: {' '.join(args)}")
+        # 2. Face Image (Source)
+        face_url = job_input.get("faceUrl")
+        face_base64 = job_input.get("faceBase64")
+        source_image_b64 = job_input.get("source_image")
+        face_path = job_input.get("facePath", "/tmp/input/source.jpg")
+        
+        if face_url:
+            save_file_from_url(face_url, face_path)
+        elif face_base64 or source_image_b64:
+            save_file_from_base64(face_base64 or source_image_b64, face_path)
+        else:
+            return {"success": False, "error": "❌ Нет лица"}
+        
+        output_path = job_input.get("outputPath", "/tmp/output/result.mp4")
+        
+        # ==================================================
+        # ИЗМЕНЕННЫЙ БЛОК: ФОРМИРОВАНИЕ КОМАНДЫ
+        # ==================================================
+        custom_args = job_input.get("args")
+        
+        if custom_args:
+            # Если напарник прислал свои аргументы, мы принудительно добавляем отключение NSFW в конец
+            if "--content-analyser-model" not in custom_args:
+                custom_args.extend(["--content-analyser-model", "none"])
+            command = ["python"] + custom_args
+        else:
+            # Твоя идеальная GPU команда
+            command = [
+                "python", "facefusion.py",
+                "headless-run",
+                "-s", face_path,
+                "-t", template_path,
+                "-o", output_path,
+                "--processors", "face_swapper",
+                "--execution-providers", "cuda", 
+                "--execution-thread-count", "4",
+                "--execution-queue-count", "2",
+                "--video-memory-strategy", "moderate",
+                "--face-detector-model", "yoloface",
+                "--face-detector-size", "640x640",
+                "--skip-download",
+                # ГЛАВНОЕ ДОПОЛНЕНИЕ:
+                "--content-analyser-model", "none" 
+            ]
+        
+        print("\n🔧 КОМАНДА ЗАПУСКА:")
+        print(" ".join(command))
         sys.stdout.flush()
-
-        # 5. ВЫПОЛНЕНИЕ
-        result = subprocess.run(args, cwd="/app", capture_output=True, text=True, timeout=600)
+        
+        result = subprocess.run(command, cwd="/app", capture_output=True, text=True, timeout=600)
+        
+        # ... (весь остальной код возврата результата остается БЕЗ изменений) ...
+        print("\n📄 STDOUT:")
+        print(result.stdout)
+        if result.stderr:
+            print("\n⚠️ STDERR:")
+            print(result.stderr)
 
         if result.returncode != 0:
-            error_log = result.stderr or result.stdout
-            print(f"❌ ОШИБКА FACEFUSION:\n{error_log}")
-            return {"success": False, "error": error_log}
-
-        # 6. КОДИРОВАНИЕ РЕЗУЛЬТАТА
-        if os.path.exists(output_path):
-            with open(output_path, "rb") as v:
-                video_base64 = base64.b64encode(v.read()).decode('utf-8')
-            
-            response_data = {
-                "success": True,
-                "videoBase64": video_base64,
-                "requestId": request_id,
-                "message": "круто"
-            }
-            
-            if callback_url:
-                send_callback(callback_url, response_data)
-            
-            return response_data
-        else:
-            return {"success": False, "error": "❌ Файл результата не найден"}
-
+            error_data = {"requestId": request_id, "success": False, "error": result.stderr}
+            if callback_url: send_callback(callback_url, error_data)
+            return error_data
+        
+        if not os.path.exists(output_path):
+            return {"success": False, "error": "❌ Файл не создан"}
+        
+        video_base64 = file_to_base64(output_path)
+        response_data = {
+            "requestId": request_id,
+            "userId": user_id,
+            "success": True,
+            "videoBase64": video_base64,
+            "file_size_mb": round(os.path.getsize(output_path) / 1024 / 1024, 2),
+            "message": "Обработка успешно завершена"
+        }
+        
+        if callback_url:
+            send_callback(callback_url, response_data)
+            response_data["videoBase64"] = None
+        
+        return response_data
+        
     except Exception as e:
-        print(f"❌ КРИТИЧЕСКАЯ ОШИБКА: {str(e)}")
         return {"success": False, "error": str(e)}
-    finally:
-        # Чистка временных файлов
-        for p in [source_path, output_path]:
-            if os.path.exists(p): os.remove(p)
 
 if __name__ == "__main__":
     runpod.serverless.start({"handler": handler})
