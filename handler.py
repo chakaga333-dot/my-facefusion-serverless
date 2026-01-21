@@ -156,15 +156,14 @@ def handler(job):
                 "-t", template_path,
                 "-o", output_path,
                 "--processors", "face_swapper",
-                "--execution-providers", "cuda", 
+                "--execution-providers", "cuda",
                 "--execution-thread-count", "4",
                 "--execution-queue-count", "2",
                 "--video-memory-strategy", "moderate",
                 "--face-detector-model", "yoloface",
                 "--face-detector-size", "640x640",
                 "--skip-download",
-                # ГЛАВНОЕ ДОПОЛНЕНИЕ:
-                "--content-analyser-model", "none" 
+                "--content-analyser-model", "none"  # 👈 ДОБАВЬ ЭТУ СТРОКУ ЗДЕСЬ
             ]
         
         print("\n🔧 КОМАНДА ЗАПУСКА:")
