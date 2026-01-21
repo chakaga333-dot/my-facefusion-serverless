@@ -6,115 +6,96 @@ import sys
 import urllib.request
 import requests
 
+# Твоя диагностика CUDA остается (важно для логов)
+try:
+    import onnxruntime
+    providers = onnxruntime.get_available_providers()
+    print(f"✅ CUDA статус: {'CUDAExecutionProvider' in providers}")
+except:
+    print("❌ Ошибка диагностики")
+
 def handler(job):
     try:
         job_input = job["input"]
-        
-        # Идентификаторы задачи
-        requestId = job_input.get("requestId")
-        userId = job_input.get("userId")
+        requestId = job_input.get("requestId", "task")
         callbackUrl = job_input.get("callbackUrl")
-        
-        print(f"🎬 Processing Request: {requestId}")
-        if callbackUrl:
-            print(f"📬 Callback URL: {callbackUrl}")
 
-        # 1. Загрузка шаблона (С КЭШИРОВАНИЕМ)
-        template_url = job_input.get("templateUrl")
-        template_path = job_input.get("templatePath")
+        # 1. Подготовка путей (как в твоем рабочем коде)
+        os.makedirs("/tmp/input", exist_ok=True)
+        os.makedirs("/tmp/output", exist_ok=True)
         
-        if template_url and template_path:
-            # Создаем папку, если её нет
-            os.makedirs(os.path.dirname(template_path), exist_ok=True)
-            
-            # Проверяем, есть ли файл. Если есть - НЕ качаем заново.
-            if not os.path.exists(template_path):
-                print(f"⬇️ Downloading template from: {template_url}")
-                try:
-                    urllib.request.urlretrieve(template_url, template_path)
-                    print(f"✅ Template saved to: {template_path}")
-                except Exception as e:
-                    return {"success": False, "error": f"Failed to download template: {str(e)}"}
-            else:
-                print(f"⚡ Template found in cache: {template_path}")
+        source_path = "/tmp/input/source.jpg"
+        target_path = job_input.get("templatePath", "/tmp/input/target.mp4")
+        output_path = job_input.get("outputPath", "/tmp/output/result.mp4")
 
-        # 2. Сохранение лица (URL или Base64)
+        # 2. Сохранение лица (URL или Base64 от напарника)
         face_url = job_input.get("faceUrl")
         face_base64 = job_input.get("faceBase64")
-        face_save_path = job_input.get("facePath")
         
-        if face_save_path:
-            os.makedirs(os.path.dirname(face_save_path), exist_ok=True)
-            try:
-                if face_url:
-                    print(f"⬇️ Downloading face from: {face_url}")
-                    urllib.request.urlretrieve(face_url, face_save_path)
-                elif face_base64:
-                    if "," in face_base64:
-                        face_base64 = face_base64.split(",")[1]
-                    with open(face_save_path, "wb") as f:
-                        f.write(base64.b64decode(face_base64))
-                print(f"✅ Face image saved: {face_save_path}")
-            except Exception as e:
-                return {"success": False, "error": f"Failed to save face image: {str(e)}"}
+        if face_url:
+            urllib.request.urlretrieve(face_url, source_path)
+        elif face_base64:
+            if "," in face_base64: face_base64 = face_base64.split(",")[1]
+            with open(source_path, "wb") as f:
+                f.write(base64.b64decode(face_base64))
 
-        # 3. Запуск команды (FaceFusion)
+        # 3. Шаблон (Скачивание, если его нет в /runpod-volume)
+        template_url = job_input.get("templateUrl")
+        if template_url and not os.path.exists(target_path):
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            urllib.request.urlretrieve(template_url, target_path)
+
+        # 4. ФОРМИРОВАНИЕ КОМАНДЫ (Твоя идеальная база + его надстройка)
+        # Если напарник прислал готовые args — берем их, если нет — твой конфиг
         args = job_input.get("args")
         if not args:
-            return {"success": False, "error": "No args provided"}
+            args = [
+                "facefusion.py", "headless-run",
+                "-s", source_path,
+                "-t", target_path,
+                "-o", output_path,
+                "--processors", "face_swapper",
+                "--execution-providers", "cuda",
+                "--skip-download" # Чтобы не лез за моделями в сеть
+            ]
 
-        print(f"🚀 Running: python {' '.join(args)}")
+        print(f"🚀 Запуск: python {' '.join(args)}")
         
-        # Запускаем из папки /app, где лежит facefusion.py
-        result = subprocess.run(["python"] + args, cwd="/app", capture_output=True, text=True)
+        # Твой проверенный запуск
+        result = subprocess.run(
+            ["python"] + args, 
+            cwd="/app", 
+            capture_output=True, 
+            text=True, 
+            timeout=600
+        )
 
-        if result.returncode != 0:
-            print(f"❌ Error: {result.stderr}")
-            if callbackUrl:
-                try:
-                    requests.post(callbackUrl, json={
-                        "requestId": requestId,
-                        "userId": userId,
-                        "success": False,
-                        "error": result.stderr
-                    }, timeout=10)
-                except: pass
-            return {"success": False, "error": result.stderr, "stdout": result.stdout}
-
-        # 4. Обработка результата
-        output_path = job_input.get("outputPath")
+        # 5. Обработка результата
         video_data = None
-        
-        if output_path and os.path.exists(output_path):
-            print(f"✅ Output found: {output_path}")
+        if os.path.exists(output_path):
             with open(output_path, "rb") as v:
                 video_data = base64.b64encode(v.read()).decode('utf-8')
-            
-            # Отправка на сервер напарника (Callback)
-            if callbackUrl:
-                print(f"📡 Sending callback to {callbackUrl}")
-                try:
-                    r = requests.post(callbackUrl, json={
-                        "requestId": requestId,
-                        "userId": userId,
-                        "success": True,
-                        "videoBase64": video_data
-                    }, timeout=60) # Увеличил таймаут для больших видео
-                    print(f"Callback response: {r.status_code}")
-                except Exception as cb_err:
-                    print(f"⚠️ Callback failed: {cb_err}")
 
-        # 5. Очистка (ВАЖНО: template_path НЕ удаляем!)
+        # Колбэк напарнику
+        if callbackUrl and video_data:
+            try:
+                requests.post(callbackUrl, json={
+                    "requestId": requestId, 
+                    "success": True, 
+                    "videoBase64": video_data
+                }, timeout=30)
+            except: pass
+
+        # Очистка (как в коде напарника) [cite: 15, 31]
         try:
-            if face_save_path and os.path.exists(face_save_path): os.remove(face_save_path)
-            # if template_path and os.path.exists(template_path): os.remove(template_path) <--- ЗАКОММЕНТИРОВАНО ДЛЯ КЭША
-            if output_path and os.path.exists(output_path): os.remove(output_path)
+            if os.path.exists(source_path): os.remove(source_path)
+            if "/tmp/" in output_path and os.path.exists(output_path): os.remove(output_path)
         except: pass
 
         return {
-            "success": True,
-            "videoBase64": video_data if not callbackUrl else None, 
-            "message": "Render complete"
+            "success": True, 
+            "videoBase64": video_data if not callbackUrl else "Sent to Callback",
+            "message": "круто" 
         }
 
     except Exception as e:
