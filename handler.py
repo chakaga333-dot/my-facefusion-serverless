@@ -2,13 +2,10 @@ import runpod
 import subprocess
 import os
 import sys
+import base64
 import urllib.request
+import requests
 import onnxruntime
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
-from email.mime.text import MIMEText
-from email import encoders
 
 # ============================================================
 # ДИАГНОСТИКА CUDA ПРИ ЗАПУСКЕ
@@ -31,7 +28,6 @@ print("Доступные провайдеры:", providers)
 print("CUDA доступна:", "CUDAExecutionProvider" in providers)
 print("=" * 60)
 
-# Проверка переменных окружения
 print("📋 ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ:")
 print(f"LD_LIBRARY_PATH: {os.environ.get('LD_LIBRARY_PATH', '❌ Не установлена')}")
 print(f"CUDA_HOME: {os.environ.get('CUDA_HOME', '❌ Не установлена')}")
@@ -39,106 +35,67 @@ print("=" * 60)
 sys.stdout.flush()
 
 
-def send_email_with_attachment(file_path, recipient_email):
-    """
-    Отправка видео на email через SMTP Gmail
-    
-    ВАЖНО: Нужно настроить переменные окружения:
-    - SMTP_EMAIL: ваш Gmail (например: yourname@gmail.com)
-    - SMTP_PASSWORD: пароль приложения Gmail (не обычный пароль!)
-    """
+def save_file_from_url(url, output_path):
+    """Скачивание файла по URL"""
     try:
-        # Получение credentials из переменных окружения
-        smtp_email = os.environ.get('SMTP_EMAIL')
-        smtp_password = os.environ.get('SMTP_PASSWORD')
-        
-        if not smtp_email or not smtp_password:
-            print("⚠️ SMTP credentials не настроены. Видео не отправлено.")
-            print("   Установите SMTP_EMAIL и SMTP_PASSWORD в RunPod")
-            return False
-        
-        print(f"\n📧 Отправка видео на {recipient_email}...")
-        
-        # Создание сообщения
-        msg = MIMEMultipart()
-        msg['From'] = smtp_email
-        msg['To'] = recipient_email
-        msg['Subject'] = "✅ Ваше FaceFusion видео готово!"
-        
-        # Текст письма
-        body = """
-Здравствуйте!
-
-Ваше видео с замененным лицом успешно обработано и готово к просмотру.
-
-Видео прикреплено к этому письму.
-
----
-FaceFusion RunPod Service
-        """
-        msg.attach(MIMEText(body, 'plain'))
-        
-        # Прикрепление видео
-        file_size_mb = os.path.getsize(file_path) / 1024 / 1024
-        print(f"📎 Прикрепляю файл ({file_size_mb:.2f} MB)...")
-        
-        with open(file_path, 'rb') as attachment:
-            part = MIMEBase('application', 'octet-stream')
-            part.set_payload(attachment.read())
-        
-        encoders.encode_base64(part)
-        part.add_header(
-            'Content-Disposition',
-            f'attachment; filename=facefusion_result.mp4'
-        )
-        msg.attach(part)
-        
-        # Отправка через Gmail SMTP
-        print("🔄 Подключение к Gmail SMTP...")
-        server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()
-        server.login(smtp_email, smtp_password)
-        
-        print("📤 Отправка письма...")
-        server.send_message(msg)
-        server.quit()
-        
-        print(f"✅ Письмо успешно отправлено на {recipient_email}!")
+        print(f"📥 Скачиваю файл: {url}")
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        urllib.request.urlretrieve(url, output_path)
+        print(f"✅ Файл сохранен: {output_path}")
         return True
-        
     except Exception as e:
-        print(f"❌ Ошибка при отправке email: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        print(f"❌ Ошибка при скачивании: {str(e)}")
         return False
 
 
-def download_file(url, output_path):
-    """
-    Скачивание файла по URL с отображением прогресса
-    """
+def save_file_from_base64(base64_data, output_path):
+    """Сохранение base64 в файл"""
     try:
-        print(f"📥 Скачиваю файл: {url}")
-        urllib.request.urlretrieve(url, output_path)
-        print(f"✅ Файл сохранен: {output_path}")
-        return output_path
+        if ',' in base64_data:
+            base64_data = base64_data.split(',')[1]
+        
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        with open(output_path, 'wb') as f:
+            f.write(base64.b64decode(base64_data))
+        print(f"✅ Файл сохранен из base64: {output_path}")
+        return True
     except Exception as e:
-        print(f"❌ Ошибка при скачивании: {str(e)}")
-        raise
+        print(f"❌ Ошибка сохранения base64: {str(e)}")
+        return False
 
 
-def process_facefusion(job):
+def file_to_base64(file_path):
+    """Конвертация файла в base64"""
+    try:
+        with open(file_path, 'rb') as f:
+            data = f.read()
+        base64_data = base64.b64encode(data).decode('utf-8')
+        print(f"✅ Файл конвертирован в base64 ({len(base64_data)} символов)")
+        return base64_data
+    except Exception as e:
+        print(f"❌ Ошибка конвертации: {str(e)}")
+        return None
+
+
+def send_callback(callback_url, data):
+    """Отправка callback на VPS сервер"""
+    try:
+        print(f"📡 Отправка callback на {callback_url}")
+        response = requests.post(callback_url, json=data, timeout=30)
+        print(f"✅ Callback отправлен: {response.status_code}")
+        return True
+    except Exception as e:
+        print(f"⚠️ Ошибка callback: {str(e)}")
+        return False
+
+
+def handler(job):
     """
-    Основной обработчик задачи FaceFusion
+    Универсальный обработчик с поддержкой GPU и callback
     
-    Ожидаемые параметры в job['input']:
-    - source: URL фотографии источника (лицо для замены)
-    - target: URL видео цели (куда вставляем лицо)
-    
-    Возвращает:
-    - success: True/False
-    - output_path: путь к результату (если успешно)
-    - error: описание ошибки (если провал)
+    Поддерживает два режима работы:
+    1. Простой режим (простые параметры)
+    2. Расширенный режим напарника (с args, callback, templateUrl и т.д.)
     """
     try:
         print("\n" + "=" * 60)
@@ -146,65 +103,141 @@ def process_facefusion(job):
         print("=" * 60)
         
         job_input = job["input"]
-        source_url = job_input.get("source")
-        target_url = job_input.get("target")
         
-        # Валидация входных данных
-        if not source_url or not target_url:
-            error_msg = "❌ Не указаны обязательные параметры 'source' или 'target'"
-            print(error_msg)
-            return {"error": error_msg}
+        # Извлечение параметров
+        request_id = job_input.get("requestId", "unknown")
+        user_id = job_input.get("userId", "unknown")
+        callback_url = job_input.get("callbackUrl")
         
-        print(f"📸 Source URL: {source_url}")
-        print(f"🎬 Target URL: {target_url}")
+        print(f"🎬 Request ID: {request_id}")
+        print(f"👤 User ID: {user_id}")
+        if callback_url:
+            print(f"📞 Callback URL: {callback_url}")
         
         # Создание временных директорий
         os.makedirs("/tmp/input", exist_ok=True)
         os.makedirs("/tmp/output", exist_ok=True)
         
-        # Определение путей к файлам
-        source_path = "/tmp/input/source.jpg"
-        target_path = "/tmp/input/target.mp4"
-        output_path = "/tmp/output/result.mp4"
+        # ==================================================
+        # ОБРАБОТКА ВХОДНЫХ ФАЙЛОВ
+        # ==================================================
         
-        # Скачивание исходных файлов
-        print("\n📥 СКАЧИВАНИЕ ФАЙЛОВ:")
-        download_file(source_url, source_path)
-        download_file(target_url, target_path)
+        # 1. Template/Target Video
+        template_url = job_input.get("templateUrl")
+        template_path = job_input.get("templatePath", "/tmp/input/target.mp4")
+        target_url = job_input.get("target_video_url")  # Альтернативное название
         
-        # Формирование команды для запуска FaceFusion
-        # ВАЖНО: Используем facefusion.py, а не run.py!
-        command = [
-            "python", "facefusion.py",
-            "headless-run",
-            "-s", source_path,                # Source (короткая форма)
-            "-t", target_path,                # Target (короткая форма)
-            "-o", output_path,                # Output (короткая форма)
-            "--processors", "face_swapper",   # Только замена лиц
-            "--execution-providers", "cuda",  # ОБЯЗАТЕЛЬНО GPU
-            "--execution-thread-count", "4",  # 4 потока для GPU
-            "--execution-queue-count", "2",   # Очередь для параллелизма
-            "--video-memory-strategy", "moderate",  # Умеренное использование памяти
-            "--face-detector-model", "yoloface",    # Быстрая модель детекции
-            "--face-detector-size", "640x640"
-        ]
+        video_source = template_url or target_url
+        if not video_source:
+            error_msg = "❌ Не указано видео (templateUrl или target_video_url)"
+            print(error_msg)
+            if callback_url:
+                send_callback(callback_url, {
+                    "requestId": request_id,
+                    "userId": user_id,
+                    "success": False,
+                    "error": error_msg
+                })
+            return {"success": False, "error": error_msg}
+        
+        if not save_file_from_url(video_source, template_path):
+            error_msg = "❌ Не удалось скачать видео"
+            if callback_url:
+                send_callback(callback_url, {
+                    "requestId": request_id,
+                    "userId": user_id,
+                    "success": False,
+                    "error": error_msg
+                })
+            return {"success": False, "error": error_msg}
+        
+        # 2. Face Image (Source)
+        face_url = job_input.get("faceUrl")
+        face_base64 = job_input.get("faceBase64")
+        source_image_b64 = job_input.get("source_image")  # Альтернативное название
+        
+        face_path = job_input.get("facePath", "/tmp/input/source.jpg")
+        
+        # Приоритет: faceUrl > faceBase64 > source_image
+        if face_url:
+            if not save_file_from_url(face_url, face_path):
+                error_msg = "❌ Не удалось скачать изображение лица"
+                if callback_url:
+                    send_callback(callback_url, {
+                        "requestId": request_id,
+                        "userId": user_id,
+                        "success": False,
+                        "error": error_msg
+                    })
+                return {"success": False, "error": error_msg}
+        elif face_base64 or source_image_b64:
+            base64_data = face_base64 or source_image_b64
+            if not save_file_from_base64(base64_data, face_path):
+                error_msg = "❌ Не удалось сохранить изображение из base64"
+                if callback_url:
+                    send_callback(callback_url, {
+                        "requestId": request_id,
+                        "userId": user_id,
+                        "success": False,
+                        "error": error_msg
+                    })
+                return {"success": False, "error": error_msg}
+        else:
+            error_msg = "❌ Не указано изображение лица"
+            if callback_url:
+                send_callback(callback_url, {
+                    "requestId": request_id,
+                    "userId": user_id,
+                    "success": False,
+                    "error": error_msg
+                })
+            return {"success": False, "error": error_msg}
+        
+        # ==================================================
+        # ЗАПУСК FACEFUSION
+        # ==================================================
+        
+        output_path = job_input.get("outputPath", "/tmp/output/result.mp4")
+        
+        # Проверяем, передал ли напарник custom args
+        custom_args = job_input.get("args")
+        
+        if custom_args:
+            # Используем args от напарника
+            print(f"🔧 Используются custom args от сервера")
+            command = ["python"] + custom_args
+        else:
+            # Используем нашу оптимизированную GPU команду БЕЗ NSFW фильтра
+            command = [
+                "python", "facefusion.py",
+                "headless-run",
+                "-s", face_path,
+                "-t", template_path,
+                "-o", output_path,
+                "--processors", "face_swapper",
+                "--execution-providers", "cuda",  # ⚡ GPU ОБЯЗАТЕЛЬНО
+                "--execution-thread-count", "4",
+                "--execution-queue-count", "2",
+                "--video-memory-strategy", "moderate",
+                "--face-detector-model", "yoloface",
+                "--face-detector-size", "640x640"
+            ]
         
         print("\n🔧 КОМАНДА ЗАПУСКА:")
         print(" ".join(command))
         print("\n⏳ Обработка началась (макс. 10 минут)...")
         sys.stdout.flush()
         
-        # Запуск процесса FaceFusion с увеличенным таймаутом для первого запуска
-        # (может потребоваться время на скачивание моделей)
+        # Запуск FaceFusion
         result = subprocess.run(
             command,
             cwd="/app",
             capture_output=True,
             text=True,
-            timeout=600  # Таймаут 10 минут для первого запуска с загрузкой моделей
+            timeout=600
         )
         
-        # Вывод логов в RunPod
+        # Вывод логов
         print("\n📄 STDOUT:")
         print(result.stdout)
         if result.stderr:
@@ -213,46 +246,115 @@ def process_facefusion(job):
         
         sys.stdout.flush()
         
-        # Проверка кода возврата
+        # Проверка результата
         if result.returncode != 0:
-            return {
-                "error": "Процесс FaceFusion завершился с ошибкой",
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-                "returncode": result.returncode
+            error_data = {
+                "requestId": request_id,
+                "userId": user_id,
+                "success": False,
+                "error": result.stderr,
+                "stdout": result.stdout
             }
+            
+            if callback_url:
+                send_callback(callback_url, error_data)
+            
+            return error_data
         
-        # Проверка создания выходного файла
+        # ==================================================
+        # ОБРАБОТКА РЕЗУЛЬТАТА
+        # ==================================================
+        
         if not os.path.exists(output_path):
-            return {"error": "Выходной файл не был создан"}
+            error_msg = "❌ Выходной файл не был создан"
+            if callback_url:
+                send_callback(callback_url, {
+                    "requestId": request_id,
+                    "userId": user_id,
+                    "success": False,
+                    "error": error_msg
+                })
+            return {"success": False, "error": error_msg}
         
         file_size = os.path.getsize(output_path)
         print(f"\n✅ УСПЕХ! Файл создан: {output_path}")
         print(f"📦 Размер файла: {file_size / 1024 / 1024:.2f} MB")
         
-        # Отправка результата на email
-        recipient_email = job_input.get("email", "chakaga@mail.ru")  # Email по умолчанию
-        email_sent = send_email_with_attachment(output_path, recipient_email)
+        # Конвертация в base64
+        print("\n🔄 Конвертация видео в base64...")
+        video_base64 = file_to_base64(output_path)
         
-        return {
+        if not video_base64:
+            error_msg = "❌ Не удалось конвертировать видео в base64"
+            if callback_url:
+                send_callback(callback_url, {
+                    "requestId": request_id,
+                    "userId": user_id,
+                    "success": False,
+                    "error": error_msg
+                })
+            return {"success": False, "error": error_msg}
+        
+        # Подготовка ответа
+        response_data = {
+            "requestId": request_id,
+            "userId": user_id,
             "success": True,
-            "output_path": output_path,
+            "videoBase64": video_base64,
             "file_size_mb": round(file_size / 1024 / 1024, 2),
-            "email_sent": email_sent,
-            "recipient_email": recipient_email,
-            "message": "Обработка успешно завершена" + (" и отправлена на email" if email_sent else "")
+            "message": "Обработка успешно завершена"
         }
+        
+        # Отправка callback если указан URL
+        if callback_url:
+            send_callback(callback_url, response_data)
+            # Для callback режима не возвращаем base64 в основном ответе (экономия)
+            response_data["videoBase64"] = None
+            response_data["message"] += " (отправлено через callback)"
+        
+        # Очистка временных файлов
+        try:
+            if os.path.exists(face_path):
+                os.remove(face_path)
+            if os.path.exists(template_path):
+                os.remove(template_path)
+            if os.path.exists(output_path):
+                os.remove(output_path)
+            print("🧹 Временные файлы удалены")
+        except Exception as e:
+            print(f"⚠️ Ошибка очистки: {e}")
+        
+        return response_data
         
     except subprocess.TimeoutExpired:
         error_msg = "⏱️ Превышен таймаут обработки (10 минут)"
         print(error_msg)
-        return {"error": error_msg}
+        
+        if callback_url:
+            send_callback(callback_url, {
+                "requestId": request_id,
+                "userId": user_id,
+                "success": False,
+                "error": error_msg
+            })
+        
+        return {"success": False, "error": error_msg}
+        
     except Exception as e:
         error_msg = f"❌ Неожиданная ошибка: {str(e)}"
         print(error_msg)
         import traceback
         traceback.print_exc()
-        return {"error": error_msg}
+        
+        if callback_url:
+            send_callback(callback_url, {
+                "requestId": request_id,
+                "userId": user_id,
+                "success": False,
+                "error": error_msg
+            })
+        
+        return {"success": False, "error": error_msg}
 
 
 # ============================================================
@@ -260,8 +362,8 @@ def process_facefusion(job):
 # ============================================================
 if __name__ == "__main__":
     print("\n" + "=" * 60)
-    print("🎯 ЗАПУСК FACEFUSION RUNPOD HANDLER")
+    print("🎯 ЗАПУСК UNIFIED FACEFUSION HANDLER (GPU + CALLBACK)")
     print("=" * 60)
     sys.stdout.flush()
     
-    runpod.serverless.start({"handler": process_facefusion})
+    runpod.serverless.start({"handler": handler})
