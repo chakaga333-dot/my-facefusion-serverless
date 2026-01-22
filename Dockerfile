@@ -54,14 +54,19 @@ RUN pip install --no-cache-dir runpod
 # Создание директории для моделей
 RUN mkdir -p /root/.facefusion/models
 
-# Предзагрузка ВСЕХ необходимых моделей для избежания ошибок валидации
+# Предзагрузка моделей И их хеш-файлов для валидации
 RUN cd /root/.facefusion/models && \
-    wget -q https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/open_nsfw.onnx && \
+    echo "Скачивание моделей..." && \
     wget -q https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/inswapper_128_fp16.onnx && \
+    wget -q https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/inswapper_128_fp16.hash && \
     wget -q https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/yoloface_8n.onnx && \
+    wget -q https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/yoloface_8n.hash && \
     wget -q https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/arcface_w600k_r50.onnx && \
+    wget -q https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/arcface_w600k_r50.hash && \
     wget -q https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/2dfan4.onnx && \
-    echo "✅ Модели предзагружены"
+    wget -q https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/2dfan4.hash && \
+    echo "✅ Основные модели загружены" && \
+    ls -lh
 
 # ФИНАЛЬНАЯ ПРОВЕРКА И БЛОКИРОВКА ВЕРСИЙ
 # Принудительно переустанавливаем правильные версии если что-то их изменило

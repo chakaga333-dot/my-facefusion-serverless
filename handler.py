@@ -207,21 +207,24 @@ def handler(job):
             print(f"🔧 Используются custom args от сервера")
             command = ["python"] + custom_args
         else:
-            # Используем нашу оптимизированную GPU команду БЕЗ NSFW фильтра
+            # Используем нашу оптимизированную GPU команду
+            # ВАЖНО: Отключаем content analyser чтобы избежать ошибки open_nsfw
             command = [
                 "python", "facefusion.py",
                 "headless-run",
                 "-s", face_path,
                 "-t", template_path,
                 "-o", output_path,
-                "--processors", "face_swapper",
-                "--execution-providers", "cuda",  # ⚡ GPU ОБЯЗАТЕЛЬНО
+                "--processors", "face_swapper",  # ТОЛЬКО face_swapper, БЕЗ content_analyser
+                "--execution-providers", "cuda",
                 "--execution-thread-count", "4",
                 "--execution-queue-count", "2",
                 "--video-memory-strategy", "moderate",
                 "--face-detector-model", "yoloface",
                 "--face-detector-size", "640x640",
-                "--skip-download"  # Пропускаем проверку хешей моделей
+                "--output-video-encoder", "libx264",  # Стандартный кодек
+                "--output-video-quality", "80",  # Хорошее качество
+                "--skip-audio"  # Пропускаем аудио для ускорения
             ]
         
         print("\n🔧 КОМАНДА ЗАПУСКА:")
