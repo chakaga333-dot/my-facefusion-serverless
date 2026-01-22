@@ -54,12 +54,14 @@ RUN pip install --no-cache-dir runpod
 # Создание директории для моделей
 RUN mkdir -p /root/.facefusion/models
 
-# Предзагрузка критически важных моделей для избежания ошибок валидации
+# Предзагрузка ВСЕХ необходимых моделей для избежания ошибок валидации
 RUN cd /root/.facefusion/models && \
-    wget -q https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/open_nsfw.onnx || echo "open_nsfw download failed, will download at runtime"
-
-# Модели будут скачаны автоматически FaceFusion при первом запуске
-# Это надежнее чем пытаться скачать их вручную при сборке образа
+    wget -q https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/open_nsfw.onnx && \
+    wget -q https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/inswapper_128_fp16.onnx && \
+    wget -q https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/yoloface_8n.onnx && \
+    wget -q https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/arcface_w600k_r50.onnx && \
+    wget -q https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/2dfan4.onnx && \
+    echo "✅ Модели предзагружены"
 
 # ФИНАЛЬНАЯ ПРОВЕРКА И БЛОКИРОВКА ВЕРСИЙ
 # Принудительно переустанавливаем правильные версии если что-то их изменило
