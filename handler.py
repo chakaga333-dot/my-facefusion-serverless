@@ -6,7 +6,6 @@ import base64
 import urllib.request
 import requests
 import onnxruntime
-import hashlib
 
 # ============================================================
 # ДИАГНОСТИКА CUDA ПРИ ЗАПУСКЕ
@@ -34,48 +33,6 @@ print(f"LD_LIBRARY_PATH: {os.environ.get('LD_LIBRARY_PATH', '❌ Не устан
 print(f"CUDA_HOME: {os.environ.get('CUDA_HOME', '❌ Не установлена')}")
 print("=" * 60)
 sys.stdout.flush()
-
-
-def create_fake_hash_file():
-    """
-    Создает фиктивные файлы хешей для обхода проверки
-    """
-    try:
-        # Создаем директорию для моделей FaceFusion
-        model_dir = "/root/.insightface/models"
-        os.makedirs(model_dir, exist_ok=True)
-        
-        # Создаем пустые файлы хешей для обхода проверки
-        fake_hashes = [
-            "open_nsfw",
-            "buffalo_l",
-            "buffalo_s",
-            "antelopev2",
-            "inswapper_128"
-        ]
-        
-        for model in fake_hashes:
-            hash_file = os.path.join(model_dir, f"{model}.hash")
-            if not os.path.exists(hash_file):
-                with open(hash_file, 'w') as f:
-                    f.write("fake_hash_for_skipping_validation")
-                print(f"✅ Создан фиктивный hash файл: {hash_file}")
-        
-        # Также создаем файлы в директории facefusion
-        ff_model_dir = "/app/.assets/models"
-        os.makedirs(ff_model_dir, exist_ok=True)
-        
-        for model in fake_hashes:
-            hash_file = os.path.join(ff_model_dir, f"{model}.hash")
-            if not os.path.exists(hash_file):
-                with open(hash_file, 'w') as f:
-                    f.write("fake_hash_for_skipping_validation")
-                print(f"✅ Создан фиктивный hash файл в FaceFusion: {hash_file}")
-        
-        return True
-    except Exception as e:
-        print(f"⚠️ Ошибка создания фиктивных hash файлов: {str(e)}")
-        return False
 
 
 def save_file_from_url(url, output_path):
@@ -160,10 +117,6 @@ def handler(job):
         # Создание временных директорий
         os.makedirs("/tmp/input", exist_ok=True)
         os.makedirs("/tmp/output", exist_ok=True)
-        
-        # Создаем фиктивные hash файлы для обхода проверки
-        print("\n🔧 Создаю фиктивные hash файлы...")
-        create_fake_hash_file()
         
         # ==================================================
         # ОБРАБОТКА ВХОДНЫХ ФАЙЛОВ
@@ -254,7 +207,7 @@ def handler(job):
             print(f"🔧 Используются custom args от сервера")
             command = ["python"] + custom_args
         else:
-            # Используем нашу оптимизированную GPU команду
+            # Используем нашу оптимизированную GPU команду БЕЗ NSFW фильтра
             command = [
                 "python", "facefusion.py",
                 "headless-run",
@@ -268,9 +221,7 @@ def handler(job):
                 "--video-memory-strategy", "moderate",
                 "--face-detector-model", "yoloface",
                 "--face-detector-size", "640x640",
-                "--skip-download",  # Пропускаем скачивание
-                "--skip-analytics",  # Пропускаем аналитику
-                "--log-level", "error"  # Только ошибки
+                "--skip-download"  # Пропускаем проверку хешей моделей
             ]
         
         print("\n🔧 КОМАНДА ЗАПУСКА:")
@@ -278,21 +229,13 @@ def handler(job):
         print("\n⏳ Обработка началась (макс. 10 минут)...")
         sys.stdout.flush()
         
-        # Запуск FaceFusion с переменными окружения для отключения проверок
-        env = os.environ.copy()
-        env.update({
-            "HASH_CHECK": "0",
-            "FACE_FUSION_SKIP_DOWNLOAD": "1",
-            "INSIGHTFACE_SKIP_DOWNLOAD": "1"
-        })
-        
+        # Запуск FaceFusion
         result = subprocess.run(
             command,
             cwd="/app",
             capture_output=True,
             text=True,
-            timeout=600,
-            env=env
+            timeout=600
         )
         
         # Вывод логов
@@ -422,8 +365,6 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("🎯 ЗАПУСК UNIFIED FACEFUSION HANDLER (GPU + CALLBACK)")
     print("=" * 60)
-    print("🔧 Создаю фиктивные hash файлы...")
-    create_fake_hash_file()
     sys.stdout.flush()
     
     runpod.serverless.start({"handler": handler})
